@@ -17,5 +17,8 @@ int getch(void)
 
 void ungetch(int c)
 {
-    BUF = c;
+    if (BUF != EMPTY)
+        printf("buffer is full");
+    else 
+        BUF = c;
 }
