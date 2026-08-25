@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
 
 #define EOF (-1)
 #define BUFSIZ 1024
@@ -27,6 +28,7 @@ extern FILE _iob[OPEN_MAX];
 
 int _fillbuf(FILE *);
 int _flushbuf(int, FILE *);
+void error(char *msg);
 
 #define feof(p) ((p)->flags._EOF != 0)
 #define ferror(p) ((p)->flags._ERR != 0)
@@ -43,18 +45,50 @@ FILE _iob[OPEN_MAX] = // stdin, stdout, stderr
     { 0, (char *) 0, (char *) 0, { ._WRITE = 1 }, 1 },
     { 0, (char *) 0, (char *) 0, { ._WRITE = 1, ._UNBUF = 1 }, 2 }
 };
-FILE *mfopen(char *name, char *mode);
-int mfflush(FILE *);
-int mfclose(FILE *);
+FILE *fopen(char *name, char *mode);
+int fflush(FILE *);
+int fclose(FILE *);
+int fseek(FILE *, long, int);
 
-int main()
+int main(int argc, char *argv[])
 {
+    char msg[1000];
+    FILE *fpin, *fpout;
+    if (argc == 3)
+    {
+        if ((fpin = fopen(argv[1], "r")) == NULL) // input 
+            error(strcat(strcat(msg, "error: couldn't open file "), argv[1]));
+        if ((fpout = fopen(argv[2], "w")) == NULL) // output 
+            error(strcat(strcat(msg, "error: couldn't write to file "), argv[2]));
+    }
+    else
+        error("usage: ./mfseek input_file output_file");
+
+    if (fseek(fpin, -50, SEEK_END) == EOF)
+        error("failed to seek to last char of input file");
+    if (fseek(fpout, 15, SEEK_CUR) == EOF)
+        error("failed to seek 15 bytes past the start/end of the output file");
+    
     int c;
-    while ((c = getchar()) != EOF) ;
+    for (int i = 0; i < 50; i++) {
+        c = getc(fpin);
+        if (c == EOF)
+            break;
+        putc(c, fpout);
+    }
+
+    if (fseek(fpin, 0, SEEK_SET) == EOF)
+        error("failed to seek to start of input");
+    if (fseek(fpout, 0, SEEK_SET) == EOF)
+        error("failed to seek to start of output");
+    putc(getc(fpin), fpout);
+
+    fclose(fpin); 
+    fclose(fpout); 
     exit(0);
 }
 
-FILE *mfopen(char *name, char *mode) 
+FILE *fopen(char *name, char *mode) 
 {
     int fd;
     FILE *fp;
@@ -119,7 +153,7 @@ int _flushbuf(int c, FILE *fp)
 {
     if (fp == NULL) 
         return EOF;
-    else if (mfflush(fp) == EOF) {
+    else if (fflush(fp) == EOF) {
         return EOF;
     }
     *fp->ptr++ = (char) c;
@@ -127,12 +161,12 @@ int _flushbuf(int c, FILE *fp)
     return 0;
 }
 
-int mfflush(FILE *fp)
+int fflush(FILE *fp)
 {
     if (fp == NULL) {
         int result = 0;
         for (fp = _iob; fp < _iob + OPEN_MAX; fp++) {
-            if (fp->flags._WRITE == 1 && mfflush(fp) == EOF)
+            if (fp->flags._WRITE == 1 && fflush(fp) == EOF)
                 result = EOF;
         }
         return result;
@@ -157,13 +191,13 @@ int mfflush(FILE *fp)
     return 0;
 }
 
-int mfclose(FILE *fp)
+int fclose(FILE *fp)
 {
     int result = 0;
     if (fp == NULL || fp < _iob || fp >= _iob + OPEN_MAX)
         return EOF;
     if (fp->flags._WRITE == 1) 
-        result = mfflush(fp);
+        result = fflush(fp);
     if (fp->base != NULL)
         free(fp->base);
     if (close(fp->fd) != 0)
@@ -179,4 +213,49 @@ int mfclose(FILE *fp)
     return result;
 }
 
+int fseek(FILE *fp, long offset, int origin)
+{
+    if (fp == NULL || fp < _iob || fp >= _iob + OPEN_MAX)
+        return EOF;
+    if (origin != SEEK_CUR && origin != SEEK_SET && origin != SEEK_END)
+        return EOF;
+    if (fp->flags._WRITE == fp->flags._READ)
+        return EOF;
+    if (origin == SEEK_SET && offset < 0)
+        return EOF;
+    if (fp->flags._WRITE) {
+        // For write simple flush the current buffer
+        if (fflush(fp) == EOF)
+            return EOF;
+    } else {
+        // For read from current position we should check
+        // remaining chars count in the buffer
+        if (origin == SEEK_CUR) {
+            if (offset >= 0 && offset <= fp->cnt) {
+                fp->cnt -= offset;
+                fp->ptr += offset;
+                return 0;
+            }
+            // Out of the buffer
+            offset -= fp->cnt;
+        }
+        fp->cnt = 0; // Set to 0 to override existing buffer
+    }
+    if (lseek(fp->fd, offset, origin) == -1) {
+        fp->flags._ERR = 1; // set error flag
+        return EOF;
+    }
+    fp->flags._EOF = 0;
+    return 0;
+}
+
+void error(char *msg)
+{
+    fflush(NULL);  // flush all streams
+    while (*msg != '\0')
+        putc(*msg++, stderr); 
+    putc('\n', stderr); 
+    fflush(stderr);
+    exit(1);
+}
 
